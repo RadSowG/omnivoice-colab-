@@ -1,4 +1,4 @@
-# %cd /content/omnivoice-colab
+# %cd /content/src/omnivoice-colab
 import os
 import sys
 import logging
@@ -19,8 +19,7 @@ temp_audio_dir="./Omni_Audio"
 os.makedirs(temp_audio_dir, exist_ok=True)
 
 # Setup path to import subtitle_maker
-OmniVoice_path = f"{os.getcwd()}/OmniVoice/"
-sys.path.append(OmniVoice_path)
+sys.path.append(os.getcwd())
 from subtitle import subtitle_maker
 
 try:
@@ -81,18 +80,19 @@ INSERT_TAG_JS_VD = """
 }
 """
 
-# NLE WaveSurfer Static HTML/JS Resource
+# HTML Template & Custom Shadow CSS Override for WaveSurfer.js V7
 WAVESURFER_JS = """
 <style>
   #waveform-container [data-region] { cursor: pointer !important; }
-  #waveform-container [data-region]:hover { background-color: rgba(255, 255, 255, 0.1) !important; }
+  #waveform-container [data-region]:hover { background-color: rgba(255, 255, 255, 0.08) !important; }
   #waveform-container [data-region-handle] {
-      width: 10px !important;
-      background-color: #ffffff !important;
-      border: 1px solid #000 !important;
+      width: 8px !important;
+      background-color: #6366f1 !important;
+      border: 2px solid #ffffff !important;
       border-radius: 4px !important;
-      opacity: 0.9 !important;
-      z-index: 10 !important;
+      opacity: 1 !important;
+      z-index: 20 !important;
+      box-shadow: 0 0 6px rgba(99, 102, 241, 0.8) !important;
   }
 </style>
 <script src="https://unpkg.com/wavesurfer.js@7"></script>
@@ -113,7 +113,7 @@ WAVESURFER_JS = """
         if (sync) {
             sync.value = start.toFixed(3) + "," + end.toFixed(3);
             sync.dispatchEvent(new Event("input", {bubbles:true}));
-            document.getElementById("nle-status").innerText = `Selected: ${start.toFixed(2)}s to ${end.toFixed(2)}s`;
+            document.getElementById("nle-status").innerText = `Selection: ${start.toFixed(2)}s to ${end.toFixed(2)}s`;
         }
     }
 
@@ -132,23 +132,32 @@ WAVESURFER_JS = """
 
         if (!window.ws) {
             window.ws = WaveSurfer.create({
-                container: "#waveform", waveColor: "#4338ca", progressColor: "#6366f1", height: 120, normalize: true
+                container: "#waveform", waveColor: "#312e81", progressColor: "#4f46e5", height: 110, normalize: true
             });
             window.wsRegions = window.ws.registerPlugin(WaveSurfer.Regions.create());
-            window.wsRegions.enableDragSelection({ color: "rgba(99, 102, 241, 0.3)" });
+            
+            // Allow clicking and dragging on empty spots to build custom red selection boxes
+            window.wsRegions.enableDragSelection({ color: "rgba(244, 63, 94, 0.25)" });
 
             window.wsRegions.on("region-created", (region) => {
-                window.wsRegions.getRegions().forEach(r => { if(r !== region && r.id === "custom-sel") r.remove(); });
-                region.id = "custom-sel";
-                updateBackend(region.start, region.end);
+                if (!region.id.startsWith("seg-")) {
+                    region.id = "custom-sel";
+                    // Delete old custom selection boxes
+                    window.wsRegions.getRegions().forEach(r => { if(r !== region && r.id === "custom-sel") r.remove(); });
+                    updateBackend(region.start, region.end);
+                }
             });
 
             window.wsRegions.on("region-updated", (region) => { updateBackend(region.start, region.end); });
 
             window.wsRegions.on("region-clicked", (region, e) => {
                 e.stopPropagation();
-                window.wsRegions.getRegions().forEach(r => r.setOptions({ color: r.id.startsWith("seg") ? "rgba(255,255,255,0.05)" : "transparent" }));
-                region.setOptions({ color: "rgba(74, 222, 128, 0.3)" });
+                // Reset all segments to inactive gray
+                window.wsRegions.getRegions().forEach(r => {
+                    r.setOptions({ color: r.id.startsWith("seg") ? "rgba(255,255,255,0.05)" : "rgba(244, 63, 94, 0.25)" });
+                });
+                // Highlight the active segment green
+                region.setOptions({ color: "rgba(74, 222, 128, 0.22)" });
                 updateBackend(region.start, region.end);
             });
         }
@@ -167,7 +176,7 @@ WAVESURFER_JS = """
                         window.wsRegions.addRegion({
                             id: "seg-" + i, start: s.start, end: s.end,
                             color: "rgba(255,255,255,0.05)", drag: true, resize: true,
-                            content: `<div style="color:#fff;font-size:10px;padding:2px;pointer-events:none;">\${s.label}</div>`
+                            content: `<div style="color:#a5b4fc;font-size:11px;font-family:monospace;font-weight:bold;padding:4px;border-left:2px dashed #6366f1;background:rgba(99,102,241,0.03);height:100%;pointer-events:none;">\${s.label}</div>`
                         });
                     });
                 } catch(e) { console.error(e); }
@@ -181,15 +190,50 @@ WAVESURFER_JS = """
 </script>
 """
 
-# NLE Backend Functions
+# NLE Workspace Track calculation logic
 def get_unique_workspace_path():
     return os.path.join(os.getcwd(), "Omni_Audio", f"workspace_{uuid.uuid4().hex[:8]}.wav")
+
+def recalculate_segments_after_cut(segments, cut_start, cut_end):
+    new_segments = []
+    cut_duration = cut_end - cut_start
+    for seg in segments:
+        start, end = seg["start"], seg["end"]
+        if end <= cut_start:
+            new_segments.append(seg)
+        elif start >= cut_end:
+            new_segments.append({
+                "start": max(0.0, start - cut_duration),
+                "end": max(0.0, end - cut_duration),
+                "label": seg["label"]
+            })
+        elif start < cut_start and end > cut_end:
+            new_segments.append({
+                "start": start,
+                "end": end - cut_duration,
+                "label": seg["label"]
+            })
+        elif start >= cut_start and start < cut_end and end > cut_end:
+            new_segments.append({
+                "start": cut_start,
+                "end": cut_start + (end - cut_end),
+                "label": seg["label"]
+            })
+        elif start < cut_start and end > cut_start and end <= cut_end:
+            new_segments.append({
+                "start": start,
+                "end": cut_start,
+                "label": seg["label"]
+            })
+    return new_segments
 
 def nle_load_file(audio_path):
     if not audio_path or not os.path.exists(audio_path): return None, "[]"
     dest = get_unique_workspace_path()
     shutil.copy(audio_path, dest)
-    return dest, json.dumps([{"start": 0.0, "end": len(AudioSegment.from_file(dest))/1000.0, "label": "Original"}])
+    duration = len(AudioSegment.from_file(dest)) / 1000.0
+    segments = [{"start": 0.0, "end": duration, "label": "Original"}]
+    return dest, json.dumps(segments)
 
 def process_audio_append(workspace_path, generated_path, mode, segments_json):
     if not workspace_path or not os.path.exists(workspace_path): return workspace_path, segments_json
@@ -214,6 +258,60 @@ def process_audio_append(workspace_path, generated_path, mode, segments_json):
         combined.export(dest, format="wav")
         return dest, json.dumps(segments)
     except Exception: return workspace_path, segments_json
+
+def process_audio_cut(workspace_path, range_str, segments_json):
+    if not workspace_path or not range_str or not os.path.exists(workspace_path):
+        return workspace_path, segments_json
+    try:
+        segments = json.loads(segments_json) if segments_json else []
+        s, e = map(float, range_str.split(","))
+        audio = AudioSegment.from_file(workspace_path)
+        cut_audio = audio[:int(s * 1000)] + audio[int(e * 1000):]
+        
+        new_segments = recalculate_segments_after_cut(segments, s, e)
+        dest = get_unique_workspace_path()
+        cut_audio.export(dest, format="wav")
+        return dest, json.dumps(new_segments)
+    except Exception: return workspace_path, segments_json
+
+def process_patch_injection(workspace_path, patch_path, range_str, segments_json):
+    if not workspace_path or not patch_path or not range_str or not os.path.exists(workspace_path) or not os.path.exists(patch_path):
+        return workspace_path, segments_json
+    try:
+        segments = json.loads(segments_json) if segments_json else []
+        s, e = map(float, range_str.split(","))
+        ws_audio = AudioSegment.from_file(workspace_path)
+        patch_audio = AudioSegment.from_file(patch_path)
+        
+        patched = ws_audio[:int(s * 1000)] + patch_audio + ws_audio[int(e * 1000):]
+        
+        old_dur = e - s
+        new_dur = len(patch_audio) / 1000.0
+        diff = new_dur - old_dur
+        
+        new_segments = []
+        for seg in segments:
+            start, end = seg["start"], seg["end"]
+            if end <= s:
+                new_segments.append(seg)
+            elif start >= e:
+                new_segments.append({"start": start + diff, "end": end + diff, "label": seg["label"]})
+            elif start < s and end > e:
+                new_segments.append({"start": start, "end": end + diff, "label": seg["label"]})
+            elif start >= s and end <= e:
+                pass
+            else:
+                new_segments.append({"start": min(start, s), "end": max(end + diff, s + new_dur), "label": seg["label"]})
+                
+        new_segments.append({"start": s, "end": s + new_dur, "label": "Patch"})
+        new_segments = sorted(new_segments, key=lambda x: x["start"])
+        
+        dest = get_unique_workspace_path()
+        patched.export(dest, format="wav")
+        return dest, json.dumps(new_segments)
+    except Exception as err:
+        print(f"Patch Error: {err}")
+        return workspace_path, segments_json
 
 def prep_regeneration(workspace_path, range_str):
     if not workspace_path or not range_str: return None, 1.0, ""
@@ -352,19 +450,29 @@ with gr.Blocks(theme=theme, css=css, title="OmniVoice Demo") as demo:
                         nle_segments_state = gr.Textbox(visible=False, value="[]")
                         
                         with gr.Row():
+                            zoom_slider = gr.Slider(minimum=10, maximum=500, value=100, step=10, label="🔍 Zoom")
+                        
+                        with gr.Row():
                             load_btn = gr.Button("⬇️ Import Output to NLE", variant="primary")
                             prepend_btn = gr.Button("⬅️ Prepend Output", variant="secondary")
                             append_btn = gr.Button("Append Output ➡️", variant="secondary")
-                            regen_btn = gr.Button("♻️ Regen Selected Region", variant="primary")
+                        
+                        with gr.Row():
+                            cut_btn = gr.Button("🗑️ Delete Selection", variant="stop")
+                            regen_btn = gr.Button("♻️ Prep Selection", variant="secondary")
+                            patch_btn = gr.Button("🩹 Inject Patch / Replace", variant="primary")
                             
                         workspace_audio = gr.Audio(label="NLE Audio", type="filepath", interactive=False)
                         
                         load_btn.click(nle_load_file, inputs=[vc_audio], outputs=[workspace_audio, nle_segments_state])
                         prepend_btn.click(lambda w, g, s: process_audio_append(w, g, 'prepend', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
                         append_btn.click(lambda w, g, s: process_audio_append(w, g, 'append', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
+                        cut_btn.click(process_audio_cut, inputs=[workspace_audio, editor_sync, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
                         regen_btn.click(prep_regeneration, inputs=[workspace_audio, editor_sync], outputs=[vc_ref_audio, vc_du, vc_text])
+                        patch_btn.click(process_patch_injection, inputs=[workspace_audio, vc_audio, editor_sync, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
                         
                         workspace_audio.change(None, inputs=[workspace_audio, nle_segments_state], js="(a, s) => { if(a) window.load_to_editor(a, s); }")
+                        zoom_slider.change(None, inputs=[zoom_slider], js="(val) => { if(window.ws) window.ws.zoom(val); }")
 
                     with gr.Accordion("Download files", open=False):
                         vc_out_wav = gr.File(label="Generated Audio (WAV)")

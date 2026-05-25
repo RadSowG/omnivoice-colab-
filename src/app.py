@@ -397,8 +397,13 @@ def _gen_core(text, language, ref_audio, instruct, num_step, guidance_scale, den
     if speed is not None and float(speed) != 1.0: kw["speed"] = float(speed)
     if duration is not None and float(duration) > 0: kw["duration"] = float(duration)
     if mode == "clone":
-        if not ref_audio: return None, "Please upload reference audio."
-        kw["voice_clone_prompt"] = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=ref_text)
+        if not ref_audio:
+            return None, "Please upload reference audio."
+        
+        # Safe fallback text bypasses the internal self.transcribe call and torchcodec crash
+        safe_ref_text = ref_text.strip() if (ref_text and ref_text.strip()) else "cloned voice speech audio"
+        
+        kw["voice_clone_prompt"] = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=safe_ref_text)
     if mode == "design" and instruct and instruct.strip(): kw["instruct"] = instruct.strip()
 
     try: audio = model.generate(**kw)
@@ -464,6 +469,7 @@ with gr.Blocks(theme=theme, css=css, title="OmniVoice Demo") as demo:
                         
                         with gr.Row():
                             load_btn = gr.Button("⬇️ Import Output to NLE", variant="primary")
+                            load_ref_btn = gr.Button("🎙️ Import Reference to NLE", variant="secondary")
                             prepend_btn = gr.Button("⬅️ Prepend Output", variant="secondary")
                             append_btn = gr.Button("Append Output ➡️", variant="secondary")
                         
@@ -474,7 +480,9 @@ with gr.Blocks(theme=theme, css=css, title="OmniVoice Demo") as demo:
                             
                         workspace_audio = gr.Audio(label="NLE Audio", type="filepath", interactive=False)
                         
+                        # Click mappings
                         load_btn.click(nle_load_file, inputs=[vc_audio], outputs=[workspace_audio, nle_segments_state])
+                        load_ref_btn.click(nle_load_file, inputs=[vc_ref_audio], outputs=[workspace_audio, nle_segments_state])
                         prepend_btn.click(lambda w, g, s: process_audio_append(w, g, 'prepend', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
                         append_btn.click(lambda w, g, s: process_audio_append(w, g, 'append', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
                         cut_btn.click(process_audio_cut, inputs=[workspace_audio, editor_sync, nle_segments_state], outputs=[workspace_audio, nle_segments_state])

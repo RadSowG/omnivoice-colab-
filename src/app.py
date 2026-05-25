@@ -7,9 +7,9 @@ import uuid
 import re
 import shutil
 import json
-from typing import Any, Dict
+import base64
 
-# Dynamic Path Resolution Engine to prevent ModuleNotFoundError
+# --- DYNAMIC PATH RESOLUTION ENGINE (Fixes ModuleNotFoundError) ---
 current_dir = os.path.dirname(os.path.abspath(__file__))  # /src
 parent_dir = os.path.dirname(current_dir)                # /root
 
@@ -88,7 +88,7 @@ INSERT_TAG_JS_VD = """
 }
 """
 
-# NLE WaveSurfer and Dual-Slider control panel
+# NLE WaveSurfer with Dual-Slider & Base64 Decoder Configuration
 WAVESURFER_JS = """
 <style>
   #waveform-container [data-region] { cursor: pointer !important; }
@@ -150,10 +150,9 @@ WAVESURFER_JS = """
         }
     }
 
-    window.load_to_editor = function(audio_input, segments_json) {
-        let url = (typeof audio_input === "object") ? (audio_input.url || audio_input.data) : (audio_input.startsWith("http") ? audio_input : "/file=" + audio_input);
-        if (!url) return;
-        window.pending_audio = url;
+    window.load_to_editor = function(base64_data, segments_json) {
+        if (!base64_data) return;
+        window.pending_audio = base64_data;
         window.pending_segments = segments_json;
         initWS();
     };
@@ -195,7 +194,7 @@ WAVESURFER_JS = """
         }
 
         if (window.pending_audio) {
-            window.ws.load(window.pending_audio + "&t=" + Date.now());
+            window.ws.load(window.pending_audio);
             window.pending_audio = null;
         }
 
@@ -227,7 +226,7 @@ WAVESURFER_JS = """
                         segments.forEach((seg, idx) => {
                             const btn = document.createElement("button");
                             btn.innerText = `${seg.label} (${(seg.end - seg.start).toFixed(1)}s)`;
-                            btn.style.cssText = "background: #1e1b4b; border: 1px solid #4338ca; color: #a5b4fc; padding: 6px 12px; border-radius: 8px; font-size: 10px; font-weight: bold; cursor: pointer; white-space: nowrap; transition: all 0.2s;";
+                            btn.style.cssText = "background: #1e1b4b; border: 1px solid #4338ca; color: #a5b4fc; padding: 6px 12px; border-radius: 6px; font-size: 10px; font-weight: bold; cursor: pointer; white-space: nowrap; transition: all 0.2s;";
                             btn.onmouseover = () => { btn.style.background = "#312e81"; };
                             btn.onmouseout = () => { btn.style.background = "#1e1b4b"; };
                             
@@ -302,6 +301,18 @@ WAVESURFER_JS = """
 </script>
 """
 
+# Dynamic Base64 encoder to bypass CORS and Colab iFrame limits entirely
+def file_to_base64_audio(filepath):
+    if not filepath or not os.path.exists(filepath):
+        return ""
+    try:
+        with open(filepath, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:audio/wav;base64,{encoded}"
+    except Exception as e:
+        print(f"Base64 Conversion Failure: {e}")
+        return ""
+
 # NLE Workspace Logic
 def get_unique_workspace_path():
     return os.path.join(os.getcwd(), "Omni_Audio", f"workspace_{uuid.uuid4().hex[:8]}.wav")
@@ -340,15 +351,15 @@ def recalculate_segments_after_cut(segments, cut_start, cut_end):
     return new_segments
 
 def nle_load_file(audio_path):
-    if not audio_path or not os.path.exists(audio_path): return None, "[]"
+    if not audio_path or not os.path.exists(audio_path): return None, "[]", ""
     dest = get_unique_workspace_path()
     shutil.copy(audio_path, dest)
     duration = len(AudioSegment.from_file(dest)) / 1000.0
     segments = [{"start": 0.0, "end": duration, "label": "Original"}]
-    return dest, json.dumps(segments)
+    return dest, json.dumps(segments), file_to_base64_audio(dest)
 
 def process_audio_append(workspace_path, generated_path, mode, segments_json):
-    if not workspace_path or not os.path.exists(workspace_path): return workspace_path, segments_json
+    if not workspace_path or not os.path.exists(workspace_path): return workspace_path, segments_json, ""
     try:
         segments = json.loads(segments_json) if segments_json else []
         ws_audio = AudioSegment.from_file(workspace_path)
@@ -368,12 +379,12 @@ def process_audio_append(workspace_path, generated_path, mode, segments_json):
             
         dest = get_unique_workspace_path()
         combined.export(dest, format="wav")
-        return dest, json.dumps(segments)
-    except Exception: return workspace_path, segments_json
+        return dest, json.dumps(segments), file_to_base64_audio(dest)
+    except Exception: return workspace_path, segments_json, file_to_base64_audio(workspace_path)
 
 def process_audio_cut(workspace_path, range_str, segments_json):
     if not workspace_path or not range_str or not os.path.exists(workspace_path):
-        return workspace_path, segments_json
+        return workspace_path, segments_json, ""
     try:
         segments = json.loads(segments_json) if segments_json else []
         s, e = map(float, range_str.split(","))
@@ -383,12 +394,12 @@ def process_audio_cut(workspace_path, range_str, segments_json):
         new_segments = recalculate_segments_after_cut(segments, s, e)
         dest = get_unique_workspace_path()
         cut_audio.export(dest, format="wav")
-        return dest, json.dumps(new_segments)
-    except Exception: return workspace_path, segments_json
+        return dest, json.dumps(new_segments), file_to_base64_audio(dest)
+    except Exception: return workspace_path, segments_json, file_to_base64_audio(workspace_path)
 
 def process_patch_injection(workspace_path, patch_path, range_str, segments_json):
     if not workspace_path or not patch_path or not range_str or not os.path.exists(workspace_path) or not os.path.exists(patch_path):
-        return workspace_path, segments_json
+        return workspace_path, segments_json, ""
     try:
         segments = json.loads(segments_json) if segments_json else []
         s, e = map(float, range_str.split(","))
@@ -420,10 +431,10 @@ def process_patch_injection(workspace_path, patch_path, range_str, segments_json
         
         dest = get_unique_workspace_path()
         patched.export(dest, format="wav")
-        return dest, json.dumps(new_segments)
+        return dest, json.dumps(new_segments), file_to_base64_audio(dest)
     except Exception as err:
         print(f"Patch Error: {err}")
-        return workspace_path, segments_json
+        return workspace_path, segments_json, file_to_base64_audio(workspace_path)
 
 def prep_regeneration(workspace_path, range_str):
     if not workspace_path or not range_str: return None, 1.0, ""
@@ -442,6 +453,7 @@ def prep_regeneration(workspace_path, range_str):
         return slice_path, round(e - s, 2), transcription
     except: return None, 1.0, ""
 
+# Core Configuration logic
 _ALL_LANGUAGES = ["Auto"] + sorted(lang_display_name(n) for n in LANG_NAMES)
 _CATEGORIES = {
     "Gender": ["Male", "Female"],
@@ -486,11 +498,8 @@ def _gen_core(text, language, ref_audio, instruct, num_step, guidance_scale, den
     if not text or not text.strip(): return None, "Please enter text."
     if mode == "clone":
         if not ref_audio: return None, "Please upload reference audio."
-        
-        # Safe fallback text bypasses the internal self.transcribe call and torchcodec crash
         safe_ref_text = ref_text.strip() if (ref_text and ref_text.strip()) else "cloned voice speech audio"
         kw = dict(text=text.strip(), language=language if (language and language != "Auto") else None, generation_config=OmniVoiceGenerationConfig(num_step=int(num_step or 32), guidance_scale=float(guidance_scale) if guidance_scale is not None else 2.0, denoise=bool(denoise) if denoise is not None else True, preprocess_prompt=bool(preprocess_prompt), postprocess_output=bool(postprocess_output)))
-        
         if speed is not None and float(speed) != 1.0: kw["speed"] = float(speed)
         if duration is not None and float(duration) > 0: kw["duration"] = float(duration)
         kw["voice_clone_prompt"] = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=safe_ref_text)
@@ -557,6 +566,7 @@ with gr.Blocks(theme=theme, css=css, title="OmniVoice Demo") as demo:
                         gr.HTML(WAVESURFER_JS)
                         editor_sync = gr.Textbox(visible=False, elem_classes="editor_sync")
                         nle_segments_state = gr.Textbox(visible=False, value="[]")
+                        nle_audio_base64 = gr.Textbox(visible=False, value="") # Hidden base64 bypass
                         
                         with gr.Row():
                             zoom_slider = gr.Slider(minimum=10, maximum=500, value=100, step=10, label="🔍 Zoom")
@@ -574,15 +584,17 @@ with gr.Blocks(theme=theme, css=css, title="OmniVoice Demo") as demo:
                             
                         workspace_audio = gr.Audio(label="NLE Audio", type="filepath", interactive=False)
                         
-                        load_btn.click(nle_load_file, inputs=[vc_audio], outputs=[workspace_audio, nle_segments_state])
-                        load_ref_btn.click(nle_load_file, inputs=[vc_ref_audio], outputs=[workspace_audio, nle_segments_state])
-                        prepend_btn.click(lambda w, g, s: process_audio_append(w, g, 'prepend', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
-                        append_btn.click(lambda w, g, s: process_audio_append(w, g, 'append', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
-                        cut_btn.click(process_audio_cut, inputs=[workspace_audio, editor_sync, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
+                        # Sequential wiring mapping to the dynamic Base64 VFS pipeline
+                        load_btn.click(nle_load_file, inputs=[vc_audio], outputs=[workspace_audio, nle_segments_state, nle_audio_base64])
+                        load_ref_btn.click(nle_load_file, inputs=[vc_ref_audio], outputs=[workspace_audio, nle_segments_state, nle_audio_base64])
+                        prepend_btn.click(lambda w, g, s: process_audio_append(w, g, 'prepend', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state, nle_audio_base64])
+                        append_btn.click(lambda w, g, s: process_audio_append(w, g, 'append', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state, nle_audio_base64])
+                        cut_btn.click(process_audio_cut, inputs=[workspace_audio, editor_sync, nle_segments_state], outputs=[workspace_audio, nle_segments_state, nle_audio_base64])
                         regen_btn.click(prep_regeneration, inputs=[workspace_audio, editor_sync], outputs=[vc_ref_audio, vc_du, vc_text])
-                        patch_btn.click(process_patch_injection, inputs=[workspace_audio, vc_audio, editor_sync, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
+                        patch_btn.click(process_patch_injection, inputs=[workspace_audio, vc_audio, editor_sync, nle_segments_state], outputs=[workspace_audio, nle_segments_state, nle_audio_base64])
                         
-                        workspace_audio.change(None, inputs=[workspace_audio, nle_segments_state], js="(a, s) => { if(a) window.load_to_editor(a, s); }")
+                        # Bind JS loaders to the instant Base64 state update
+                        nle_audio_base64.change(None, inputs=[nle_audio_base64, nle_segments_state], js="(b, s) => { if(b) window.load_to_editor(b, s); }")
                         zoom_slider.change(None, inputs=[zoom_slider], js="(val) => { if(window.ws) window.ws.zoom(val); }")
 
                     with gr.Accordion("Download files", open=False):

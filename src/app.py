@@ -8,6 +8,7 @@ import re
 import shutil
 import json
 import base64
+import urllib.request
 
 # --- DYNAMIC PATH RESOLUTION ENGINE (Fixes ModuleNotFoundError) ---
 current_dir = os.path.dirname(os.path.abspath(__file__))  # /src
@@ -28,6 +29,26 @@ from pydub import AudioSegment
 
 temp_audio_dir="./Omni_Audio"
 os.makedirs(temp_audio_dir, exist_ok=True)
+
+# --- SOVEREIGN ASSET MIRROR (Bypasses Sandbox & CSP Blocks) ---
+def download_js_assets_locally():
+    assets = {
+        "wavesurfer.js": "https://unpkg.com/wavesurfer.js@7",
+        "regions.js": "https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"
+    }
+    for name, url in assets.items():
+        dest = os.path.join(temp_audio_dir, name)
+        if not os.path.exists(dest):
+            try:
+                print(f"[DAW] Mirroring {name} to local workspace...")
+                urllib.request.urlretrieve(url, dest)
+            except Exception as e:
+                print(f"[DAW] Asset mirroring failed: {e}")
+
+download_js_assets_locally()
+
+wavesurfer_local_path = os.path.abspath(os.path.join(temp_audio_dir, "wavesurfer.js"))
+regions_local_path = os.path.abspath(os.path.join(temp_audio_dir, "regions.js"))
 
 from subtitle import subtitle_maker
 try:
@@ -88,11 +109,11 @@ INSERT_TAG_JS_VD = """
 }
 """
 
-# NLE WaveSurfer with Dual-Slider & Base64 Decoder Configuration
-WAVESURFER_JS = """
+# HTML Template utilizing same-origin asset loaders (Eliminates CSP blocks)
+WAVESURFER_JS = f"""
 <style>
   #waveform-container [data-region] { cursor: pointer !important; }
-  #waveform-container [data-region-handle] {
+  #waveform-container [data-region-handle] {{
       width: 8px !important;
       background-color: #6366f1 !important;
       border: 2px solid #ffffff !important;
@@ -100,10 +121,10 @@ WAVESURFER_JS = """
       opacity: 1 !important;
       z-index: 20 !important;
       box-shadow: 0 0 6px rgba(99, 102, 241, 0.8) !important;
-  }
+  }}
 </style>
-<script src="https://unpkg.com/wavesurfer.js@7"></script>
-<script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
+<script src="/file={wavesurfer_local_path}"></script>
+<script src="/file={regions_local_path}"></script>
 
 <div id="waveform-container" style="background: #0d0e12; border-radius: 12px; padding: 20px; border: 1px solid #1f2937; font-family: monospace;">
   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -301,7 +322,7 @@ WAVESURFER_JS = """
 </script>
 """
 
-# Dynamic Base64 encoder to bypass CORS and Colab iFrame limits entirely
+# Base64 encoder bypasses browser sandbox file queries entirely
 def file_to_base64_audio(filepath):
     if not filepath or not os.path.exists(filepath):
         return ""
@@ -684,4 +705,4 @@ with gr.Blocks(theme=theme, css=css, title="OmniVoice Demo") as demo:
             )
 
 if __name__ == "__main__":
-    demo.queue().launch(share=True, debug=True)
+    demo.queue().launch(share=True, debug=True, allowed_paths=[os.getcwd()])

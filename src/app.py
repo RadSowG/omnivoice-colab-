@@ -1,4 +1,3 @@
-# %cd /content/src/omnivoice-colab
 import os
 import sys
 import logging
@@ -9,6 +8,20 @@ import shutil
 import json
 from typing import Any, Dict
 
+# --- DYNAMIC PATH RESOLUTION ENGINE (Fixes ModuleNotFoundError) ---
+current_dir = os.path.dirname(os.path.abspath(__file__))  # Points to /src directory
+parent_dir = os.path.dirname(current_dir)                # Points to root workspace directory
+
+# 1. Allow Python to look inside /src for local files (subtitle.py, hf_mirror.py)
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+# 2. Allow Python to look inside the cloned /OmniVoice folder for core models
+omnivoice_repo_path = os.path.join(parent_dir, "OmniVoice")
+if os.path.exists(omnivoice_repo_path) and omnivoice_repo_path not in sys.path:
+    sys.path.append(omnivoice_repo_path)
+
+# Now safely import external modules
 import gradio as gr
 import numpy as np
 import torch
@@ -18,10 +31,7 @@ from pydub import AudioSegment
 temp_audio_dir="./Omni_Audio"
 os.makedirs(temp_audio_dir, exist_ok=True)
 
-# Setup path to import subtitle_maker
-sys.path.append(os.getcwd())
 from subtitle import subtitle_maker
-
 try:
     from subtitle import LANGUAGE_CODE as WHISPER_LANGUAGE_CODE
 except ImportError:
@@ -176,7 +186,7 @@ WAVESURFER_JS = """
                         window.wsRegions.addRegion({
                             id: "seg-" + i, start: s.start, end: s.end,
                             color: "rgba(255,255,255,0.05)", drag: true, resize: true,
-                            content: `<div style="color:#a5b4fc;font-size:11px;font-family:monospace;font-weight:bold;padding:4px;border-left:2px dashed #6366f1;background:rgba(99,102,241,0.03);height:100%;pointer-events:none;">\${s.label}</div>`
+                            content: `<div style="color:#a5b4fc;font-size:11px;font-family:monospace;font-weight:bold;padding:4px;border-left:2px dashed #6366f1;background:rgba(99,102,241,0.03);height:100%;pointer-events:none;">${s.label}</div>`
                         });
                     });
                 } catch(e) { console.error(e); }

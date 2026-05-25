@@ -1,3 +1,4 @@
+# %cd /content/omnivoice-colab
 import os
 import sys
 import logging
@@ -8,20 +9,17 @@ import shutil
 import json
 from typing import Any, Dict
 
-# --- DYNAMIC PATH RESOLUTION ENGINE (Fixes ModuleNotFoundError) ---
-current_dir = os.path.dirname(os.path.abspath(__file__))  # Points to /src directory
-parent_dir = os.path.dirname(current_dir)                # Points to root workspace directory
+# Dynamic Path Resolution Engine to prevent ModuleNotFoundError
+current_dir = os.path.dirname(os.path.abspath(__file__))  # /src
+parent_dir = os.path.dirname(current_dir)                # /root
 
-# 1. Allow Python to look inside /src for local files (subtitle.py, hf_mirror.py)
 if current_dir not in sys.path:
     sys.path.append(current_dir)
 
-# 2. Allow Python to look inside the cloned /OmniVoice folder for core models
 omnivoice_repo_path = os.path.join(parent_dir, "OmniVoice")
 if os.path.exists(omnivoice_repo_path) and omnivoice_repo_path not in sys.path:
     sys.path.append(omnivoice_repo_path)
 
-# Now safely import external modules
 import gradio as gr
 import numpy as np
 import torch
@@ -57,7 +55,7 @@ except Exception as e:
 sampling_rate = model.sampling_rate
 print("Model loaded successfully!")
 
-# Event Tags & JS Settings
+# Event Tags
 EVENT_TAGS = ["[laughter]", "[sigh]", "[confirmation-en]", "[question-en]", "[question-ah]", "[question-oh]", "[question-ei]", "[question-yi]", "[surprise-ah]", "[surprise-oh]", "[surprise-wa]", "[surprise-yo]", "[dissatisfaction-hnn]"]
 
 INSERT_TAG_JS_VC = """
@@ -90,11 +88,10 @@ INSERT_TAG_JS_VD = """
 }
 """
 
-# HTML Template & Custom Shadow CSS Override for WaveSurfer.js V7
+# NLE WaveSurfer and Dual-Slider control panel
 WAVESURFER_JS = """
 <style>
   #waveform-container [data-region] { cursor: pointer !important; }
-  #waveform-container [data-region]:hover { background-color: rgba(255, 255, 255, 0.08) !important; }
   #waveform-container [data-region-handle] {
       width: 8px !important;
       background-color: #6366f1 !important;
@@ -107,10 +104,37 @@ WAVESURFER_JS = """
 </style>
 <script src="https://unpkg.com/wavesurfer.js@7"></script>
 <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
-<div id="waveform-container" style="background: #0d0e12; border-radius: 8px; padding: 15px; margin-top: 10px; border: 1px solid #1f2937;">
-  <div id="waveform" style="width: 100%;"></div>
-  <div id="nle-status" style="color: #4ade80; font-family: monospace; font-size: 12px; margin-top: 8px;">Waiting for audio...</div>
+
+<div id="waveform-container" style="background: #0d0e12; border-radius: 12px; padding: 20px; border: 1px solid #1f2937; font-family: monospace;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <span style="color: #818cf8; font-size: 11px; font-weight: bold; letter-spacing: 0.15em;">🎛️ MOFLIX TEMPORAL SCULPTOR</span>
+      <span id="nle-status" style="color: #4ade80; font-size: 11px;">Waiting for audio...</span>
+  </div>
+
+  <div id="waveform" style="width: 100%; background: #07080b; border-radius: 8px; border: 1px solid #111827;"></div>
+  
+  <div id="segment-track-list" style="display: flex; gap: 8px; margin-top: 12px; overflow-x: auto; padding-bottom: 5px;"></div>
+
+  <div style="margin-top: 15px; display: flex; flex-direction: column; gap: 10px; background: #07080b; padding: 12px; border-radius: 8px; border: 1px solid #111827;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+          <span style="color: #9ca3af; font-size: 10px; font-weight: bold; letter-spacing: 0.1em;">PRECISION SLIDERS</span>
+          <span id="selection-duration" style="color: #818cf8; font-size: 11px; font-weight: bold;">0.00s Selected</span>
+      </div>
+      
+      <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="color: #9ca3af; font-size: 10px; width: 45px;">START:</span>
+          <input id="slider-start" type="range" min="0" max="100" value="0" step="0.01" style="flex: 1; accent-color: #6366f1;">
+          <span id="label-start" style="color: #fff; font-size: 11px; width: 60px; text-align: right;">0.00s</span>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="color: #9ca3af; font-size: 10px; width: 45px;">END:</span>
+          <input id="slider-end" type="range" min="0" max="100" value="0" step="0.01" style="flex: 1; accent-color: #ec4899;">
+          <span id="label-end" style="color: #fff; font-size: 11px; width: 60px; text-align: right;">0.00s</span>
+      </div>
+  </div>
 </div>
+
 <script>
 (function() {
     window.ws = null;
@@ -123,7 +147,6 @@ WAVESURFER_JS = """
         if (sync) {
             sync.value = start.toFixed(3) + "," + end.toFixed(3);
             sync.dispatchEvent(new Event("input", {bubbles:true}));
-            document.getElementById("nle-status").innerText = `Selection: ${start.toFixed(2)}s to ${end.toFixed(2)}s`;
         }
     }
 
@@ -142,33 +165,32 @@ WAVESURFER_JS = """
 
         if (!window.ws) {
             window.ws = WaveSurfer.create({
-                container: "#waveform", waveColor: "#312e81", progressColor: "#4f46e5", height: 110, normalize: true
+                container: "#waveform", waveColor: "#1e1b4b", progressColor: "#4338ca", height: 110, normalize: true
             });
             window.wsRegions = window.ws.registerPlugin(WaveSurfer.Regions.create());
-            
-            // Allow clicking and dragging on empty spots to build custom red selection boxes
-            window.wsRegions.enableDragSelection({ color: "rgba(244, 63, 94, 0.25)" });
+            window.wsRegions.enableDragSelection({ color: "rgba(99, 102, 241, 0.22)" });
 
             window.wsRegions.on("region-created", (region) => {
                 if (!region.id.startsWith("seg-")) {
-                    region.id = "custom-sel";
-                    // Delete old custom selection boxes
-                    window.wsRegions.getRegions().forEach(r => { if(r !== region && r.id === "custom-sel") r.remove(); });
+                    region.id = "active-sel";
+                    window.wsRegions.getRegions().forEach(r => { if(r !== region && r.id === "active-sel") r.remove(); });
                     updateBackend(region.start, region.end);
                 }
             });
 
-            window.wsRegions.on("region-updated", (region) => { updateBackend(region.start, region.end); });
-
-            window.wsRegions.on("region-clicked", (region, e) => {
-                e.stopPropagation();
-                // Reset all segments to inactive gray
-                window.wsRegions.getRegions().forEach(r => {
-                    r.setOptions({ color: r.id.startsWith("seg") ? "rgba(255,255,255,0.05)" : "rgba(244, 63, 94, 0.25)" });
-                });
-                // Highlight the active segment green
-                region.setOptions({ color: "rgba(74, 222, 128, 0.22)" });
-                updateBackend(region.start, region.end);
+            window.wsRegions.on("region-updated", (region) => {
+                if (region.id === "active-sel") {
+                    const sliderStart = document.getElementById("slider-start");
+                    const sliderEnd = document.getElementById("slider-end");
+                    if (sliderStart && sliderEnd) {
+                        sliderStart.value = region.start;
+                        sliderEnd.value = region.end;
+                        document.getElementById("label-start").innerText = region.start.toFixed(2) + "s";
+                        document.getElementById("label-end").innerText = region.end.toFixed(2) + "s";
+                        document.getElementById("selection-duration").innerText = (region.end - region.start).toFixed(2) + "s Selected";
+                    }
+                    updateBackend(region.start, region.end);
+                }
             });
         }
 
@@ -178,29 +200,109 @@ WAVESURFER_JS = """
         }
 
         window.ws.on("ready", () => {
-            window.wsRegions.clearRegions();
-            if (window.pending_segments && window.pending_segments !== "[]") {
-                try {
-                    let segs = JSON.parse(window.pending_segments);
-                    segs.forEach((s, i) => {
-                        window.wsRegions.addRegion({
-                            id: "seg-" + i, start: s.start, end: s.end,
-                            color: "rgba(255,255,255,0.05)", drag: true, resize: true,
-                            content: `<div style="color:#a5b4fc;font-size:11px;font-family:monospace;font-weight:bold;padding:4px;border-left:2px dashed #6366f1;background:rgba(99,102,241,0.03);height:100%;pointer-events:none;">${s.label}</div>`
-                        });
-                    });
-                } catch(e) { console.error(e); }
-            } else {
-                window.wsRegions.addRegion({ id: "seg-0", start: 0, end: window.ws.getDuration(), color: "rgba(255,255,255,0.05)", drag: true, resize: true, content: "Main" });
+            const duration = window.ws.getDuration();
+            const sliderStart = document.getElementById("slider-start");
+            const sliderEnd = document.getElementById("slider-end");
+
+            if (sliderStart && sliderEnd) {
+                sliderStart.max = duration;
+                sliderEnd.max = duration;
+                sliderStart.value = 0;
+                sliderEnd.value = duration;
+                
+                document.getElementById("label-start").innerText = "0.00s";
+                document.getElementById("label-end").innerText = duration.toFixed(2) + "s";
+                document.getElementById("selection-duration").innerText = duration.toFixed(2) + "s Selected";
+                
+                updateBackend(0, duration);
             }
+
+            // Draw segment track list
+            const trackList = document.getElementById("segment-track-list");
+            if (trackList) {
+                trackList.innerHTML = "";
+                if (window.pending_segments) {
+                    try {
+                        const segments = JSON.parse(window.pending_segments);
+                        segments.forEach((seg, idx) => {
+                            const btn = document.createElement("button");
+                            btn.innerText = `${seg.label} (${(seg.end - seg.start).toFixed(1)}s)`;
+                            btn.style.cssText = "background: #1e1b4b; border: 1px solid #4338ca; color: #a5b4fc; padding: 6px 12px; border-radius: 8px; font-size: 10px; font-weight: bold; cursor: pointer; white-space: nowrap; transition: all 0.2s;";
+                            btn.onmouseover = () => { btn.style.background = "#312e81"; };
+                            btn.onmouseout = () => { btn.style.background = "#1e1b4b"; };
+                            
+                            btn.onclick = (e) => {
+                                e.stopPropagation();
+                                sliderStart.value = seg.start;
+                                sliderEnd.value = seg.end;
+                                syncSelectionFromSliders();
+                            };
+                            trackList.appendChild(btn);
+                        });
+                    } catch(e) { console.error(e); }
+                }
+            }
+
+            window.wsRegions.clearRegions();
+            window.wsRegions.addRegion({
+                id: "active-sel", start: 0, end: duration, color: "rgba(99, 102, 241, 0.25)", drag: true, resize: true
+            });
         });
+
+        // Wire Up Slider Input Elements
+        const sliderStart = document.getElementById("slider-start");
+        const sliderEnd = document.getElementById("slider-end");
+
+        if (sliderStart && !sliderStart.dataset.wired) {
+            sliderStart.dataset.wired = "true";
+            
+            const handleSliderChange = () => {
+                let start = parseFloat(sliderStart.value);
+                let end = parseFloat(sliderEnd.value);
+                
+                if (start > end) {
+                    start = end;
+                    sliderStart.value = start;
+                }
+                
+                document.getElementById("label-start").innerText = start.toFixed(2) + "s";
+                document.getElementById("label-end").innerText = end.toFixed(2) + "s";
+                document.getElementById("selection-duration").innerText = (end - start).toFixed(2) + "s Selected";
+                
+                const region = window.wsRegions.getRegions().find(r => r.id === "active-sel");
+                if (region) {
+                    region.setOptions({ start, end });
+                }
+                updateBackend(start, end);
+            };
+
+            sliderStart.addEventListener("input", handleSliderChange);
+            sliderEnd.addEventListener("input", handleSliderChange);
+        }
     }
-    initWS();
+
+    function syncSelectionFromSliders() {
+        const sliderStart = document.getElementById("slider-start");
+        const sliderEnd = document.getElementById("slider-end");
+        if (sliderStart && sliderEnd) {
+            const start = parseFloat(sliderStart.value);
+            const end = parseFloat(sliderEnd.value);
+            document.getElementById("label-start").innerText = start.toFixed(2) + "s";
+            document.getElementById("label-end").innerText = end.toFixed(2) + "s";
+            document.getElementById("selection-duration").innerText = (end - start).toFixed(2) + "s Selected";
+            
+            const region = window.wsRegions.getRegions().find(r => r.id === "active-sel");
+            if (region) {
+                region.setOptions({ start, end });
+            }
+            updateBackend(start, end);
+        }
+    }
 })();
 </script>
 """
 
-# NLE Workspace Track calculation logic
+# NLE Workspace Logic
 def get_unique_workspace_path():
     return os.path.join(os.getcwd(), "Omni_Audio", f"workspace_{uuid.uuid4().hex[:8]}.wav")
 
@@ -340,7 +442,6 @@ def prep_regeneration(workspace_path, range_str):
         return slice_path, round(e - s, 2), transcription
     except: return None, 1.0, ""
 
-# Rest of model/synthesis core logic mapping
 _ALL_LANGUAGES = ["Auto"] + sorted(lang_display_name(n) for n in LANG_NAMES)
 _CATEGORIES = {
     "Gender": ["Male", "Female"],
@@ -383,28 +484,21 @@ def tts_file_name(text, language="en"):
 
 def _gen_core(text, language, ref_audio, instruct, num_step, guidance_scale, denoise, speed, duration, preprocess_prompt, postprocess_output, mode, ref_text=None):
     if not text or not text.strip(): return None, "Please enter text."
-    if mode == "clone" and ref_audio and not ref_text:
-        try:
-            whisper_lang = language if (language and language != "Auto") else None
-            whisper_results = subtitle_maker(ref_audio, whisper_lang)
-            if whisper_results and len(whisper_results) > 7: ref_text = whisper_results[7]
-        except: pass
-
-    gen_config = OmniVoiceGenerationConfig(num_step=int(num_step or 32), guidance_scale=float(guidance_scale) if guidance_scale is not None else 2.0, denoise=bool(denoise) if denoise is not None else True, preprocess_prompt=bool(preprocess_prompt), postprocess_output=bool(postprocess_output))
-    lang = language if (language and language != "Auto") else None
-    kw = dict(text=text.strip(), language=lang, generation_config=gen_config)
-
-    if speed is not None and float(speed) != 1.0: kw["speed"] = float(speed)
-    if duration is not None and float(duration) > 0: kw["duration"] = float(duration)
     if mode == "clone":
-        if not ref_audio:
-            return None, "Please upload reference audio."
+        if not ref_audio: return None, "Please upload reference audio."
         
         # Safe fallback text bypasses the internal self.transcribe call and torchcodec crash
         safe_ref_text = ref_text.strip() if (ref_text and ref_text.strip()) else "cloned voice speech audio"
+        kw = dict(text=text.strip(), language=language if (language and language != "Auto") else None, generation_config=OmniVoiceGenerationConfig(num_step=int(num_step or 32), guidance_scale=float(guidance_scale) if guidance_scale is not None else 2.0, denoise=bool(denoise) if denoise is not None else True, preprocess_prompt=bool(preprocess_prompt), postprocess_output=bool(postprocess_output)))
         
+        if speed is not None and float(speed) != 1.0: kw["speed"] = float(speed)
+        if duration is not None and float(duration) > 0: kw["duration"] = float(duration)
         kw["voice_clone_prompt"] = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=safe_ref_text)
-    if mode == "design" and instruct and instruct.strip(): kw["instruct"] = instruct.strip()
+    else:
+        kw = dict(text=text.strip(), language=language if (language and language != "Auto") else None, generation_config=OmniVoiceGenerationConfig(num_step=int(num_step or 32), guidance_scale=float(guidance_scale) if guidance_scale is not None else 2.0, denoise=bool(denoise) if denoise is not None else True, preprocess_prompt=bool(preprocess_prompt), postprocess_output=bool(postprocess_output)))
+        if speed is not None and float(speed) != 1.0: kw["speed"] = float(speed)
+        if duration is not None and float(duration) > 0: kw["duration"] = float(duration)
+        if instruct and instruct.strip(): kw["instruct"] = instruct.strip()
 
     try: audio = model.generate(**kw)
     except Exception as e: return None, f"Error: {e}"
@@ -480,7 +574,6 @@ with gr.Blocks(theme=theme, css=css, title="OmniVoice Demo") as demo:
                             
                         workspace_audio = gr.Audio(label="NLE Audio", type="filepath", interactive=False)
                         
-                        # Click mappings
                         load_btn.click(nle_load_file, inputs=[vc_audio], outputs=[workspace_audio, nle_segments_state])
                         load_ref_btn.click(nle_load_file, inputs=[vc_ref_audio], outputs=[workspace_audio, nle_segments_state])
                         prepend_btn.click(lambda w, g, s: process_audio_append(w, g, 'prepend', s), inputs=[workspace_audio, vc_audio, nle_segments_state], outputs=[workspace_audio, nle_segments_state])
